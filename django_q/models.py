@@ -21,8 +21,6 @@ from django_q.conf import croniter, Conf
 from django_q.signing import SignedPackage
 from django_q.utils import localtime, add_months, add_years
 
-from .utils import get_func_repr
-
 
 class Task(models.Model):
     id = models.CharField(max_length=32, primary_key=True, editable=False)
@@ -306,20 +304,29 @@ class OrmQ(models.Model):
     payload = models.TextField()
     lock = models.DateTimeField(null=True)
 
+    @property
     def task(self):
         return SignedPackage.loads(self.payload)
 
     def func(self):
-        return get_func_repr(self.task()["func"])
+        if isinstance(self.task, dict):
+            return self.task.get("func_name", "")
+        return self.task.func_name
 
     def task_id(self):
-        return self.task()["id"]
+        if isinstance(self.task, dict):
+            return self.task.get("id", "")
+        return self.task.id
 
     def name(self):
-        return self.task()["name"]
+        if isinstance(self.task, dict):
+            return self.task["name"]
+        return self.task.name
 
     def group(self):
-        return self.task().get("group")
+        if isinstance(self.task, dict):
+            return self.task.get("group", "")
+        return self.task.group
 
     class Meta:
         app_label = "django_q"

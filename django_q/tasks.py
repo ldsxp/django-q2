@@ -1,5 +1,6 @@
 """Provides task functionality."""
 # Standard
+from django_q.queue_task import QueueTask
 from multiprocessing import Value
 from time import sleep, time
 
@@ -12,13 +13,16 @@ from django_q.brokers import get_broker
 from django_q.conf import Conf, logger
 from django_q.humanhash import uuid
 from django_q.models import Schedule, Task
-from django_q.queues import Queue
 from django_q.signals import pre_enqueue
 from django_q.signing import SignedPackage
 
 
 def async_task(func, *args, **kwargs):
     """Queue a task for the cluster."""
+    logger.info("Adding task")
+    logger.info(func)
+    logger.info(args)
+    logger.info(kwargs)
     keywords = kwargs.copy()
     opt_keys = (
         "hook",
@@ -37,43 +41,41 @@ def async_task(func, *args, **kwargs):
     # get an id
     tag = uuid()
     # build the task package
-    task = {
-        "id": tag[1],
-        "name": keywords.pop("task_name", None)
-        or q_options.pop("task_name", None)
-        or tag[0],
-        "func": func,
-        "args": args,
-    }
+    task = QueueTask(
+        id=tag[1],
+        name=keywords.pop("task_name", None) or q_options.pop("task_name", None) or tag[0],
+        func=func,
+        args=args
+    )
+
+
     # push optionals
-    for key in opt_keys:
-        if q_options and key in q_options:
-            task[key] = q_options[key]
-        elif key in keywords:
-            task[key] = keywords.pop(key)
-    # don't serialize the broker
-    broker = task.pop("broker", get_broker())
-    # overrides
-    if "cached" not in task and Conf.CACHED:
-        task["cached"] = Conf.CACHED
-    if "sync" not in task and Conf.SYNC:
-        task["sync"] = Conf.SYNC
-    if "ack_failure" not in task and Conf.ACK_FAILURES:
-        task["ack_failure"] = Conf.ACK_FAILURES
-    # finalize
-    task["kwargs"] = keywords
-    task["started"] = timezone.now()
+    # for key in opt_keys:
+    #     if q_options and key in q_options:
+    #         task[key] = q_options[key]
+    #     elif key in keywords:
+    #         task[key] = keywords.pop(key)
+    # # don't serialize the broker
+    #broker = task.pop("broker", get_broker())
+    broker = get_broker()
+    # # overrides
+    # if "cached" not in task and Conf.CACHED:
+    #     task["cached"] = Conf.CACHED
+    # if "sync" not in task and Conf.SYNC:
+    #     task["sync"] = Conf.SYNC
+    # # finalize
+    task.kwargs = keywords
     # signal it
     pre_enqueue.send(sender="django_q", task=task)
     # sign it
     pack = SignedPackage.dumps(task)
-    if task.get("sync", False):
-        return _sync(pack)
+    # if task.get("sync", False):
+    #     return _sync(pack)
     # push it
     enqueue_id = broker.enqueue(pack)
     logger.info(f"Enqueued {enqueue_id}")
     logger.debug(f"Pushed {tag}")
-    return task["id"]
+    return task.id
 
 
 def schedule(func, *args, **kwargs):
@@ -110,7 +112,7 @@ def schedule(func, *args, **kwargs):
         raise IntegrityError("A schedule with the same name already exists.")
 
     # create and return the schedule
-    s = Schedule(
+    return Schedule.objects.create(
         name=name,
         func=func,
         hook=hook,
@@ -124,11 +126,6 @@ def schedule(func, *args, **kwargs):
         cluster=cluster,
         intended_date_kwarg=intended_date_kwarg,
     )
-    # make sure we trigger validation
-    s.full_clean()
-    s.save()
-    return s
-
 
 def result(task_id, wait=0, cached=Conf.CACHED):
     """
@@ -267,16 +264,16 @@ def fetch_cached(task_id, wait=0, broker=None):
         if r:
             task = SignedPackage.loads(r)
             return Task(
-                id=task["id"],
-                name=task["name"],
-                func=task["func"],
-                hook=task.get("hook"),
-                args=task["args"],
-                kwargs=task["kwargs"],
-                started=task["started"],
-                stopped=task["stopped"],
-                result=task["result"],
-                success=task["success"],
+                id=task.id,
+                name=task.name,
+                func=task.func,
+                hook=task.hook,
+                args=task.args,
+                kwargs=task.kwargs,
+                started=task.started_at,
+                stopped=task.finished_at,
+                result=task.result,
+                success=task.result_payload,
             )
         if (time() - start) * 1000 >= wait >= 0:
             break
@@ -337,17 +334,17 @@ def fetch_group_cached(group_id, failures=True, wait=0, count=None, broker=None)
                 task = SignedPackage.loads(broker.cache.get(task_key))
                 if task["success"] or failures:
                     t = Task(
-                        id=task["id"],
-                        name=task["name"],
-                        func=task["func"],
-                        hook=task.get("hook"),
-                        args=task["args"],
-                        kwargs=task["kwargs"],
-                        started=task["started"],
-                        stopped=task["stopped"],
-                        result=task["result"],
-                        group=task.get("group"),
-                        success=task["success"],
+                        id=task.id,
+                        name=task.name,
+                        func=task.func,
+                        hook=task.hook,
+                        args=task.args,
+                        kwargs=task.kwargs,
+                        started=task.started_at,
+                        stopped=task.finished_at,
+                        result=task.result_payload,
+                        group=task.group,
+                        success=task.result,
                     )
                     task_list.append(t)
             return task_list
@@ -384,7 +381,7 @@ def count_group_cached(group_id, failures=False, broker=None):
         failure_count = 0
         for task_key in group_list:
             task = SignedPackage.loads(broker.cache.get(task_key))
-            if not task["success"]:
+            if not task.has_succeeded:
                 failure_count += 1
         return failure_count
 
@@ -762,16 +759,14 @@ def _sync(pack):
     """Simulate a package travelling through the cluster."""
     from django_q.cluster import monitor, worker
 
-    task_queue = Queue()
-    result_queue = Queue()
-    task = SignedPackage.loads(pack)
-    task_queue.put(task)
-    task_queue.put("STOP")
-    worker(task_queue, result_queue, Value("f", -1))
-    result_queue.put("STOP")
-    monitor(result_queue)
-    task_queue.close()
-    task_queue.join_thread()
-    result_queue.close()
-    result_queue.join_thread()
-    return task["id"]
+    # task = SignedPackage.loads(pack)
+    # task_queue.put(task)
+    # task_queue.put("STOP")
+    # worker(task_queue, result_queue, Value("f", -1))
+    # result_queue.put("STOP")
+    # monitor(result_queue)
+    # task_queue.close()
+    # task_queue.join_thread()
+    # result_queue.close()
+    # result_queue.join_thread()
+    # return task["id"]
