@@ -1,15 +1,12 @@
 # Standard
-import ast
-from queue import Empty
-from django_q.worker import Pool, Worker
-import pydoc
+from django_q.scheduler import Scheduler
+from django_q.puller import Puller
+from django_q.worker import Pool
 import signal
 from django_q.monitor import Monitor
 import socket
-import traceback
 import uuid
-from datetime import datetime, timedelta
-from multiprocessing import Event, Process, Value, current_process
+from multiprocessing import Event, Process, current_process
 from time import sleep
 
 # Django
@@ -31,13 +28,10 @@ import django_q.tasks
 from django_q.brokers import Broker, get_broker
 from django_q.conf import (
     Conf,
-    croniter,
-    error_reporter,
     get_ppid,
     logger,
     psutil,
     setproctitle,
-    resource,
 )
 from django_q.humanhash import humanize
 from django_q.status import Stat, Status
@@ -152,16 +146,11 @@ class Sentinel:
         self.tob = timezone.now()
         self.stop_event = stop_event
         self.start_event = start_event
-        self.pool = []
         self.timeout = timeout
         self.event_out = Event()
         logger.info(
             _("%(name)s main at %(id)s") % {"name": self.name, "id": current_process().pid}
         )
-        from django_q.puller import Puller
-        self.puller = Puller()
-
-        self.monitor = Monitor()
         if start:
             self.start()
 
@@ -174,11 +163,11 @@ class Sentinel:
         if not self.start_event.is_set() and not self.stop_event.is_set():
             return Conf.STARTING
         elif self.start_event.is_set() and not self.stop_event.is_set():
-            if self.result_queue.empty() and self.task_queue.empty():
+            if self.monitor.is_idle and self.pool.is_done:
                 return Conf.IDLE
             return Conf.WORKING
         elif self.stop_event.is_set() and self.start_event.is_set():
-            if self.monitor.is_alive() or self.puller.is_alive() or len(self.pool) > 0:
+            if self.monitor.is_alive or self.puller.is_alive or len(self.pool.workers) > 0:
                 return Conf.STOPPING
             return Conf.STOPPED
 
@@ -189,6 +178,9 @@ class Sentinel:
             db.connections.close_all()
         # spawn worker pool
         self.pool = Pool()
+        self.puller = Puller()
+        self.monitor = Monitor()
+        self.scheduler = Scheduler()
         # set worker cpu affinity if needed
         if psutil and Conf.CPU_AFFINITY:
             set_cpu_affinity(Conf.CPU_AFFINITY, [w.process.process_id for w in self.pool.workers])
@@ -210,8 +202,6 @@ class Sentinel:
         counter = 0
         # Guard loop. Runs at least once
         while not self.stop_event.is_set() or not counter:
-            logger.info("is set")
-            logger.info(self.stop_event.is_set())
             # Check if the pool of workers is healthy
             logger.info("Check if pool is healthy")
             if not self.pool.is_healthy:
@@ -226,6 +216,11 @@ class Sentinel:
             print("Check if monitor is healthy")
             if not self.monitor.is_alive:
                 self.monitor.reincarnate_process()
+
+            print("Check if scheduler is healthy")
+            if not self.scheduler.is_alive:
+                self.scheduler.reincarnate_process()
+
 
             print("add tasks and mark workers idle")
             for worker in self.pool.get_done_workers():
@@ -250,8 +245,8 @@ class Sentinel:
             self.pool.delegate_tasks()
 
             logger.info("sleep")
-            sleep(Conf.GUARD_CYCLE)
             counter += 1
+            sleep(Conf.GUARD_CYCLE)
         self.stop()
 
     def stop(self):
@@ -259,27 +254,36 @@ class Sentinel:
         logger.info(_("%(name)s stopping cluster processes") % {"name": name})
         # Stopping guard
         self.stop_event.set()
-        logger.info(_("Guard has stopped"))
+        logger.debug(_("Guard has stopped"))
+        # Stop scheduler
+        self.scheduler.stop_scheduler()
 
         # End all workers gracefully
         for __ in range(Conf.WORKERS):
             self.pool.add_task("STOP")
 
-        # manually loop through the tasks
-        while not self.pool.task_queue.empty():
+        # make sure the tasks queue in the pool is empty and workers are idle max timeout 20 sec
+        time_passed = 0
+        while not self.pool.is_done and time_passed <= 20:
             self.monitor.run_item()
             self.pool.delegate_tasks()
+            time_passed += 0.5
             sleep(0.5)
+        if time_passed >= 20:
+            logger.error(_("Couldn't terminate tasks within 20 seconds, killing processes now"))
+            for worker in self.pool.workers:
+                worker.process.kill()
 
-        logger.info(_("All tasks were processed and workers where stopped"))
+
+        logger.debug(_("All tasks were processed and workers where stopped"))
 
         self.monitor.add_task("STOP")
-        while not self.monitor.task_queue.empty():
+        while not self.monitor.is_done:
             # in the case the monitor was behind, let's run through all
             self.monitor.run_item()
             sleep(0.5)
 
-        logger.info(_("All tasks were saved"))
+        logger.debug(_("All tasks were saved"))
 
         self.puller.stop_puller()
 
@@ -289,8 +293,9 @@ class Sentinel:
 
         self.monitor.process.terminate()
         self.puller.process.terminate()
+        self.scheduler.process.terminate()
 
-        logger.info(_("All processes were terminated"))
+        logger.debug(_("All processes were terminated"))
 
 
 def set_cpu_affinity(n: int, process_ids: list, actual: bool = not Conf.TESTING):

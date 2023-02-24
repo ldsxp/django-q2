@@ -1,23 +1,17 @@
-from utils import localtime
-from models import Schedule
-from djang_q import tasks
+from django_q.utils import localtime
+from django_q.models import Schedule
+from django_q import tasks
 import ast
 from django_q.humanhash import humanize
 from django import db
-from signing import BadSignature, SignedPackage
 from time import sleep
 from django_q.brokers import get_broker
-import multiprocessing
-from django_q.queue_task import QueueTask
 from django.utils import timezone
-import enum
-import traceback
 
-from multiprocessing import Event, Process, Value, current_process
+from multiprocessing import current_process
 from django_q.utils import close_old_django_connections
 from django.utils.translation import gettext_lazy as _
-from django_q.conf import Conf, logger, setproctitle, error_reporter, resource, psutil
-from django_q.exceptions import TimeoutException, TimeoutHandler
+from django_q.conf import Conf, logger
 from django_q.process_manager import ProcessManager
 
 
@@ -27,8 +21,22 @@ class Scheduler(ProcessManager):
     def get_target(self):
         return self.run_scheduler
 
+    def stop_scheduler(self) -> None:
+        # send task to worker
+        self.manager_pipe.send("STOP")
+
     def run_scheduler(self, status, pipe) -> None:
+        self.process_name = current_process().name
+        self.process_id = current_process().pid
+        status.value = self.Status.BUSY.value
+        logger.info(
+            _("%(proc_name)s scheduling at %(id)s")
+            % {"proc_name": self.process_name, "id": self.process_id}
+        )
         while True:
+            if pipe.poll() and pipe.recv() == "STOP":
+                status.value = self.Status.DONE.value
+                break
             broker = get_broker()
             close_old_django_connections()
             try:
@@ -125,4 +133,3 @@ class Scheduler(ProcessManager):
                 logger.exception("Could not create task from schedule")
             # sleep 60 seconds for next schedule
             sleep(60)
-

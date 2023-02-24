@@ -1,13 +1,11 @@
-import multiprocessing
-from multiprocessing.queues import Queue
+from queue import Queue
 from queue import Empty
-from django_q.queue_task import QueueTask
 from django_q.brokers import get_broker
 from django_q.process_manager import ProcessManager
 from django_q.signals import post_execute
-from django_q.conf import Conf, logger, error_reporter, resource
+from django_q.conf import logger
 from django.utils.translation import gettext_lazy as _
-from multiprocessing import Event, Process, Value, current_process
+from multiprocessing import current_process
 
 try:
     import setproctitle
@@ -18,8 +16,11 @@ except ModuleNotFoundError:
 class Monitor(ProcessManager):
     def __init__(self):
         super().__init__()
-        self.task_queue = Queue(ctx=multiprocessing.get_context())
-        self.status.value = self.Status.IDLE.value
+        self.task_queue = Queue()
+
+    @property
+    def is_done(self):
+        return self.status.value == self.Status.IDLE.value and self.task_queue.empty()
 
     def get_target(self):
         return self.run_monitor
@@ -44,13 +45,14 @@ class Monitor(ProcessManager):
         logger.info(
             _("%(name)s monitoring at %(id)s") % {"name": proc_name, "id": current_process().pid}
         )
+        status.value = self.Status.IDLE.value
 
         while True:
             task = pipe.recv()
-            status.value = self.Status.BUSY
             if task == "STOP":
                 logger.info(f"Monitor {proc_name} shut down")
                 break
+            status.value = self.Status.BUSY.value
             # save the result
             if task.cached:
                 task.save_cached(broker)
@@ -78,6 +80,6 @@ class Monitor(ProcessManager):
                         "task_result": task.result_payload,
                     }
                 )
-            status.value = self.Status.IDLE
+            status.value = self.Status.IDLE.value
         logger.info(_("%(name)s stopped monitoring results") % {"name": proc_name})
 

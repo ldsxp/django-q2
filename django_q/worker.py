@@ -1,5 +1,5 @@
 import multiprocessing
-from multiprocessing.queues import Queue
+from queue import Queue
 from queue import Empty
 from typing import Optional
 from django_q.queue_task import QueueTask
@@ -39,7 +39,7 @@ class Pool:
     def __init__(self, workers=Conf.WORKERS):
         self.amount_workers = workers
         self.workers = []
-        self.task_queue = Queue(ctx=multiprocessing.get_context())
+        self.task_queue = Queue()
         self.start_workers()
 
     def start_workers(self):
@@ -57,6 +57,16 @@ class Pool:
     def is_healthy(self):
         """Checks if all workers are still operating"""
         return all(worker.is_alive for worker in self.workers)
+
+    @property
+    def is_idle(self):
+        """Checks if all workers are idle"""
+        return all(worker.is_idle for worker in self.workers)
+
+    @property
+    def is_done(self):
+        """Checks if all workers are idle and task queue is empty"""
+        return self.is_idle and self.task_queue.empty()
 
     def reincarnate_stopped_workers(self):
         """Reincarnates workers that are not alive anymore"""
@@ -153,7 +163,7 @@ class WorkerProcess(Process):
             # signal execution
             pre_execute.send(sender="django_q", func=task.func, task=task)
 
-            status.value = Worker.Status.BUSY.value
+            status.value = ProcessManager.Status.BUSY.value
             task.started_at = timezone.now()
             try:
                 with TimeoutHandler(timeout=task.timeout):
@@ -183,13 +193,13 @@ class WorkerProcess(Process):
             self.task_count += 1
 
             # Set to DONE so main process can pick it up
-            status.value = Worker.Status.DONE.value
+            status.value = ProcessManager.Status.DONE.value
             if setproctitle:
                 setproctitle.setproctitle(f"qcluster {self.process_name} completed with task")
 
             # Recreate a new process if this task has had the max amount of runs or exceeded resources
             if self.task_count == Conf.RECYCLE or self.rss_check():
-                status.value = Worker.Status.RECYCLE
+                status.value = ProcessManager.Status.RECYCLE
                 break
 
             pipe.send(task)

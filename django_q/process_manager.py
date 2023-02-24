@@ -18,7 +18,6 @@ class ProcessManager(ABC):
         RECYCLE = 4
 
     target = None
-    status = Value("i", Status.IDLE.value)
 
     def get_target(self) -> Callable:
         if self.target is None:
@@ -26,6 +25,7 @@ class ProcessManager(ABC):
         return self.target
 
     def __init__(self):
+        self.status = Value("i", self.Status.IDLE.value)
         self.process = self.spawn_process()
         self.name = humanize(uuid.uuid4().hex)
 
