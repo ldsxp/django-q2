@@ -1,4 +1,5 @@
 import signal
+from typing import Optional
 
 class TimeoutException(SystemExit):
     """Exception for when a worker takes too long to complete a task"""
@@ -6,7 +7,7 @@ class TimeoutException(SystemExit):
 
 
 class TimeoutHandler:
-    def __init__(self, timeout: int):
+    def __init__(self, timeout: Optional[int] = None):
         self._timeout = timeout
 
     def raise_timeout_exception(self, signum, frame):
@@ -14,6 +15,8 @@ class TimeoutHandler:
                               '({0} seconds)'.format(self._timeout))
 
     def __enter__(self):
+        if self._timeout is None:
+            return
         signal.signal(signal.SIGALRM, self.raise_timeout_exception)
         signal.alarm(self._timeout)
 

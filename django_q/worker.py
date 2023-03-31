@@ -1,7 +1,7 @@
 import multiprocessing
 from queue import Queue
 from queue import Empty
-from typing import Optional
+from typing import Optional, Tuple, Union
 from django_q.queue_task import QueueTask
 from django.utils import timezone
 import traceback
@@ -31,7 +31,11 @@ class Worker(ProcessManager):
 
     def start_task(self, task) -> None:
         # send task to worker
-        self.manager_pipe.send(task)
+        try:
+            self.manager_pipe.send(task)
+        except BrokenPipeError:
+            # recycle process if pipe is broken
+            self.status.value = ProcessManager.Status.RECYCLE.value
 
 
 class Pool:
@@ -102,6 +106,36 @@ class Pool:
 
 class WorkerProcess(Process):
 
+    @staticmethod
+    def run_task(task) -> Tuple[QueueTask, bool]:
+        # signal execution
+        pre_execute.send(sender="django_q", func=task.func, task=task)
+        task.started_at = timezone.now()
+        try:
+            with TimeoutHandler(timeout=task.timeout):
+                func = task.callable_func()
+                res = func(*task.args, **task.kwargs)
+                result = res
+        except (TimeoutException, Exception) as e:
+            if isinstance(e, TimeoutException):
+                task.result = QueueTask.Result.TIMEOUT
+            else:
+                task.result = QueueTask.Result.FAILED
+            result = f"{e} : {traceback.format_exc()}"
+
+            if error_reporter:
+                error_reporter.report()
+            if task.sync:
+                raise
+            return task
+        else:
+            # succeeded
+            task.result = QueueTask.Result.SUCCESS
+        finally:
+            task.result_payload = result
+            task.finished_at = timezone.now()
+        return task
+
     def __init__(self, group=None, name=None, args=(), kwargs={}, daemon=None):
         target = self.processing_tasks
         super().__init__(group=group, target=target, name=name, args=args, kwargs=kwargs, daemon=daemon)
@@ -160,35 +194,9 @@ class WorkerProcess(Process):
                 continue
 
             close_old_django_connections()
-            # signal execution
-            pre_execute.send(sender="django_q", func=task.func, task=task)
 
             status.value = ProcessManager.Status.BUSY.value
-            task.started_at = timezone.now()
-            try:
-                with TimeoutHandler(timeout=task.timeout):
-                    func = task.callable_func()
-                    res = func(*task.args, **task.kwargs)
-                    result = res
-            except (TimeoutException, Exception) as e:
-                if isinstance(e, TimeoutException):
-                    task.result = QueueTask.Result.TIMEOUT
-                else:
-                    task.result = QueueTask.Result.FAILED
-                result = f"{e} : {traceback.format_exc()}"
-                logger.info(result)
-
-                if error_reporter:
-                    error_reporter.report()
-                if task.sync:
-                    raise
-            else:
-                # succeeded
-                task.result = QueueTask.Result.SUCCESS
-            finally:
-                task.result_payload = result
-                task.finished_at = timezone.now()
-
+            task = WorkerProcess.run_task(task)
             # Add task towards total
             self.task_count += 1
 

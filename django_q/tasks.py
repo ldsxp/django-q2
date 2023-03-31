@@ -1,5 +1,6 @@
 """Provides task functionality."""
 # Standard
+from django_q.helpers import run_cluster_once
 from django_q.queue_task import QueueTask
 from multiprocessing import Value
 from time import sleep, time
@@ -19,11 +20,7 @@ from django_q.signing import SignedPackage
 
 def async_task(func, *args, **kwargs):
     """Queue a task for the cluster."""
-    logger.info("Adding task")
-    logger.info(func)
-    logger.info(args)
-    logger.info(kwargs)
-    keywords = kwargs.copy()
+    given_kwargs = kwargs.copy()
     opt_keys = (
         "hook",
         "group",
@@ -37,40 +34,35 @@ def async_task(func, *args, **kwargs):
         "broker",
         "timeout",
     )
-    q_options = keywords.pop("q_options", {})
+    q_options = given_kwargs.pop("q_options", {})
     # get an id
     tag = uuid()
     # build the task package
     task = QueueTask(
         id=tag[1],
-        name=keywords.pop("task_name", None) or q_options.pop("task_name", None) or tag[0],
+        name=given_kwargs.pop("task_name", None) or q_options.pop("task_name", None) or tag[0],
         func=func,
         args=args
     )
 
+    # don't serialize the broker
+    broker = given_kwargs.pop("broker", None) or q_options.pop("broker", None) or get_broker()
+
+    print(broker.list_key)
 
     # push optionals
-    # for key in opt_keys:
-    #     if q_options and key in q_options:
-    #         task[key] = q_options[key]
-    #     elif key in keywords:
-    #         task[key] = keywords.pop(key)
-    # # don't serialize the broker
-    #broker = task.pop("broker", get_broker())
-    broker = get_broker()
-    # # overrides
-    # if "cached" not in task and Conf.CACHED:
-    #     task["cached"] = Conf.CACHED
-    # if "sync" not in task and Conf.SYNC:
-    #     task["sync"] = Conf.SYNC
-    # # finalize
-    task.kwargs = keywords
+    for key in opt_keys:
+        if key in q_options or key in given_kwargs:
+            setattr(task, key, q_options.pop(key, None) or given_kwargs.pop(key, None))
+
+    # finalize
+    task.kwargs = given_kwargs
     # signal it
     pre_enqueue.send(sender="django_q", task=task)
     # sign it
     pack = SignedPackage.dumps(task)
-    # if task.get("sync", False):
-    #     return _sync(pack)
+    if task.sync:
+        return _sync(pack)
     # push it
     enqueue_id = broker.enqueue(pack)
     logger.info(f"Enqueued {enqueue_id}")
@@ -112,7 +104,7 @@ def schedule(func, *args, **kwargs):
         raise IntegrityError("A schedule with the same name already exists.")
 
     # create and return the schedule
-    return Schedule.objects.create(
+    schedule = Schedule(
         name=name,
         func=func,
         hook=hook,
@@ -126,6 +118,9 @@ def schedule(func, *args, **kwargs):
         cluster=cluster,
         intended_date_kwarg=intended_date_kwarg,
     )
+    schedule.full_clean()
+    schedule.save()
+    return schedule
 
 def result(task_id, wait=0, cached=Conf.CACHED):
     """
@@ -161,7 +156,7 @@ def result_cached(task_id, wait=0, broker=None):
     while True:
         r = broker.cache.get(f"{broker.list_key}:{task_id}")
         if r:
-            return SignedPackage.loads(r)["result"]
+            return SignedPackage.loads(r).result
         if (time() - start) * 1000 >= wait >= 0:
             break
         sleep(0.01)
@@ -220,8 +215,8 @@ def result_group_cached(group_id, failures=False, wait=0, count=None, broker=Non
             result_list = []
             for task_key in group_list:
                 task = SignedPackage.loads(broker.cache.get(task_key))
-                if task["success"] or failures:
-                    result_list.append(task["result"])
+                if task.has_succeeded or failures:
+                    result_list.append(task.result)
             return result_list
         if (time() - start) * 1000 >= wait >= 0:
             break
@@ -273,7 +268,7 @@ def fetch_cached(task_id, wait=0, broker=None):
                 started=task.started_at,
                 stopped=task.finished_at,
                 result=task.result,
-                success=task.result_payload,
+                success=task.has_succeeded,
             )
         if (time() - start) * 1000 >= wait >= 0:
             break
@@ -332,7 +327,7 @@ def fetch_group_cached(group_id, failures=True, wait=0, count=None, broker=None)
             task_list = []
             for task_key in group_list:
                 task = SignedPackage.loads(broker.cache.get(task_key))
-                if task["success"] or failures:
+                if task.has_succeeded or failures:
                     t = Task(
                         id=task.id,
                         name=task.name,
@@ -342,9 +337,9 @@ def fetch_group_cached(group_id, failures=True, wait=0, count=None, broker=None)
                         kwargs=task.kwargs,
                         started=task.started_at,
                         stopped=task.finished_at,
-                        result=task.result_payload,
+                        result=task.result,
                         group=task.group,
-                        success=task.result,
+                        success=task.has_succeeded,
                     )
                     task_list.append(t)
             return task_list
@@ -757,16 +752,7 @@ class AsyncTask:
 
 def _sync(pack):
     """Simulate a package travelling through the cluster."""
-    from django_q.cluster import monitor, worker
+    task = SignedPackage.loads(pack)
+    run_cluster_once(workers=1, tasks=[task])
 
-    # task = SignedPackage.loads(pack)
-    # task_queue.put(task)
-    # task_queue.put("STOP")
-    # worker(task_queue, result_queue, Value("f", -1))
-    # result_queue.put("STOP")
-    # monitor(result_queue)
-    # task_queue.close()
-    # task_queue.join_thread()
-    # result_queue.close()
-    # result_queue.join_thread()
-    # return task["id"]
+    return task.id

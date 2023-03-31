@@ -25,25 +25,25 @@ class QueueTask:
 
     func: Union[Callable, str]
     name: str
-    group: Optional[None] = None
+    group: Optional[str] = None
     queued_at: Optional[datetime] = timezone.now()
     finished_at: Optional[datetime] = None
     ack_id: Optional[str] = None
     started_at: Optional[datetime] = None
     id: str = "-1"
-    timeout: Union[int, None] = Conf.TIMEOUT
-    result: Union[Result, None] = None
-    result_payload: Any = None
+    timeout: Optional[int] = Conf.TIMEOUT
+    result_status: Optional[Result] = None
+    result: Any = None
     save: bool = Conf.SAVE_LIMIT >= 0
     chain: Union[str, QueueTask] = ""
-    cached: bool = False
-    sync: bool = False
-    hook: Union[str, None] = None
+    cached: bool = Conf.CACHED
+    sync: bool = Conf.SYNC
+    hook: Optional[str] = None
     args: tuple = field(default_factory=tuple)
     kwargs: dict = field(default_factory=dict)
     ack_failure: bool = Conf.ACK_FAILURES
-    iter_count: Union[int, None] = None
-    iter_cached: Union[int, None] = None
+    iter_count: Optional[int] = None
+    iter_cached: Optional[int] = None
 
     def callable_func(self):
         func = self.func
@@ -53,11 +53,11 @@ class QueueTask:
 
     @property
     def has_succeeded(self):
-        return self.result == self.Result.SUCCESS
+        return self.result_status == self.Result.SUCCESS
 
     @property
     def has_timed_out(self):
-        return self.result == self.Result.TIMEOUT
+        return self.result_status == self.Result.TIMEOUT
 
     @property
     def is_callable(self):
@@ -126,7 +126,7 @@ class QueueTask:
                     'args': self.args,
                     'kwargs': self.kwargs,
                     'started': self.started_at,
-                    'result': self.result_payload,
+                    'result': self.result,
                     'group': self.group,
                     'success': self.has_succeeded,
                     'attempt_count': 1
@@ -136,8 +136,9 @@ class QueueTask:
             # only update the result if it hasn't succeeded yet
             if not created and not existing_task.success:
                 existing_task.stopped = self.finished_at
-                existing_task.result = self.result_payload
+                existing_task.result = self.result
                 existing_task.success = self.has_succeeded
+                existing_task.attempt_count += 1
                 existing_task.save()
 
             if (
@@ -145,6 +146,8 @@ class QueueTask:
                 and existing_task.attempt_count >= Conf.MAX_ATTEMPTS
             ):
                 broker.acknowledge(self.ack_id)
+
+            return existing_task
 
         except Exception:
             logger.exception("Could not save task result")
@@ -167,11 +170,11 @@ class QueueTask:
                     group_args = f"{broker.list_key}:{group}:args"
                     # collate the results into a Task result
                     results = [
-                        SignedPackage.get_queue_task(broker.cache.get(k)).result_payload
+                        SignedPackage.loads(broker.cache.get(k)).result
                         for k in group_list
                     ]
-                    results.append(self.result_payload)
-                    self.result_payload = results
+                    results.append(self.result)
+                    self.result = results
                     self.id = group
                     self.args = SignedPackage.loads(broker.cache.get(group_args))
                     self.iter_count = None

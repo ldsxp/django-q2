@@ -5,9 +5,9 @@ from datetime import date
 
 import django
 from django.utils import timezone
-from django_q.conf import settings, logger
+from django.conf import settings
 
-from django_q.conf import Conf
+from django_q.conf import Conf, logger
 
 if django.VERSION < (4, 0):
     # pytz is the default in django 3.2. Remove when no support for 3.2

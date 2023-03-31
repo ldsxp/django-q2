@@ -183,7 +183,7 @@ class Sentinel:
         self.scheduler = Scheduler()
         # set worker cpu affinity if needed
         if psutil and Conf.CPU_AFFINITY:
-            set_cpu_affinity(Conf.CPU_AFFINITY, [w.process.process_id for w in self.pool.workers])
+            set_cpu_affinity(Conf.CPU_AFFINITY, [w.process.pid for w in self.pool.workers])
 
 
     def guard(self):

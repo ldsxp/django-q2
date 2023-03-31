@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 from keyword import iskeyword
+import ast
 
 # Django
 from django import get_version
@@ -221,6 +222,34 @@ class Schedule(models.Model):
         validators=[validate_kwarg],
         help_text=_("Name of kwarg to pass intended schedule date"),
     )
+
+    def parse_kwargs(self):
+        if not self.kwargs:
+            return {}
+        try:
+            # first try the dict syntax
+            return ast.literal_eval(self.kwargs)
+        except (SyntaxError, ValueError):
+            # else use the kwargs syntax
+            try:
+                parsed_kwargs = (
+                    ast.parse(f"f({self.kwargs})").body[0].value.keywords
+                )
+                return {
+                    kwarg.arg: ast.literal_eval(kwarg.value)
+                    for kwarg in parsed_kwargs
+                }
+            except (SyntaxError, ValueError):
+                return {}
+
+    def parse_args(self):
+        if not self.args:
+            return tuple()
+        args = ast.literal_eval(self.args)
+        # single value won't eval to tuple, so:
+        if type(args) != tuple:
+            args = (args,)
+        return args
 
     def calculate_next_run(self, next_run=None):
         # next run is always in UTC
