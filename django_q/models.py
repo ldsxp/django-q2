@@ -12,6 +12,7 @@ from django.utils import timezone
 from django.utils.timezone import is_aware
 from django.utils.html import format_html
 from django.utils.translation import gettext_lazy as _
+from django.utils.functional import cached_property
 
 # External
 from picklefield import PickledObjectField
@@ -32,6 +33,7 @@ class Task(models.Model):
     kwargs = PickledObjectField(null=True, protocol=-1)
     result = PickledObjectField(null=True, protocol=-1)
     group = models.CharField(max_length=100, editable=False, null=True)
+    cluster = models.CharField(max_length=100, default=None, null=True, blank=True)
     started = models.DateTimeField(editable=False)
     stopped = models.DateTimeField(editable=False)
     success = models.BooleanField(default=True, editable=False)
@@ -214,7 +216,10 @@ class Schedule(models.Model):
         help_text=_("Cron expression"),
     )
     task = models.CharField(max_length=100, null=True, editable=False)
-    cluster = models.CharField(max_length=100, default=None, null=True, blank=True)
+    cluster = models.CharField(
+        max_length=100, default=None, null=True, blank=True,
+        help_text=_("Name of the target cluster")
+    )
     intended_date_kwarg = models.CharField(
         max_length=100,
         null=True,
@@ -329,13 +334,17 @@ class Schedule(models.Model):
 
 
 class OrmQ(models.Model):
-    key = models.CharField(max_length=100)
+    key = models.CharField(max_length=100, help_text=_("Name of the target cluster"))
     payload = models.TextField()
-    lock = models.DateTimeField(null=True)
+    lock = models.DateTimeField(null=True, help_text=_("Prevent any cluster from pulling until"))
 
-    @property
+
+    @cached_property
     def task(self):
-        return SignedPackage.loads(self.payload)
+        try:
+            return SignedPackage.loads(self.payload)
+        except Exception as e:
+            return {"id": "*" + e.__class__.__name__}
 
     def func(self):
         if isinstance(self.task, dict):
@@ -355,7 +364,17 @@ class OrmQ(models.Model):
     def group(self):
         if isinstance(self.task, dict):
             return self.task.get("group", "")
-        return self.task.group
+        return self.task.group)
+
+    def args(self):
+        return self.task.get("args")
+
+    def kwargs(self):
+        return self.task.get("kwargs")
+
+    def q_options(self):
+        exclude = {"id", "name", "group", "func", "args", "kwargs"}
+        return {k: v for k, v in self.task.items() if k not in exclude}
 
     class Meta:
         app_label = "django_q"

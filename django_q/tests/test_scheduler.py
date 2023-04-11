@@ -346,7 +346,7 @@ def test_scheduler(broker, monkeypatch):
     assert schedule.next_run.date() == (timezone.now() + timedelta(weeks=2)).date()
     broker.delete_queue()
 
-    monkeypatch.setattr(Conf, "PREFIX", "some_cluster_name")
+    monkeypatch.setattr(Conf, "CLUSTER_NAME", "some_cluster_name")
     # create a schedule on another cluster
     schedule = create_schedule(
         "math.copysign",
@@ -366,7 +366,7 @@ def test_scheduler(broker, monkeypatch):
     # queue must be empty
     assert len(tasks) == 0
 
-    monkeypatch.setattr(Conf, "PREFIX", "default")
+    monkeypatch.setattr(Conf, "CLUSTER_NAME", "default")
     # create a schedule on the same cluster
     schedule = create_schedule(
         "math.copysign",

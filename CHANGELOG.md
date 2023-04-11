@@ -2,6 +2,19 @@
 
 ## [Unreleased](https://github.com/GDay/django-q2/tree/HEAD)
 
+## [v1.5.1](https://github.com/GDay/django-q2/tree/v1.5.1) (2023-04-02)
+
+- Fix release to pipy due to changed org name
+
+## [v1.5.0](https://github.com/GDay/django-q2/tree/v1.5.0) (2023-04-02)
+
+**Merged pull requests:**
+
+- Multiple queue, multiple cluster in one site https://github.com/GDay/django-q2/pull/71
+- Allow building docs all formats https://github.com/GDay/django-q2/pull/77
+- Remove version locking on `poetry_core` to fix regex error https://github.com/GDay/django-q2/pull/87
+- Update dependencies (2023-04-02) https://github.com/GDay/django-q2/pull/88
+
 ## [v1.4.11](https://github.com/GDay/django-q2/tree/v1.4.11) (2023-01-30)
 
 **Merged pull requests:**

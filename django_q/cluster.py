@@ -38,14 +38,16 @@ from django_q.status import Stat, Status
 
 class Cluster:
     def __init__(self, broker: Broker = None):
-        self.broker = broker or get_broker()
+        # Cluster do not need an init or default broker except for testing,
+        # The sentinel will create a broker for cluster and utilize ALT_CLUSTERS config in Conf.
+        self.broker = broker  # DON'T USE get_broker() to set a default broker here.
         self.sentinel = None
         self.stop_event = None
         self.start_event = None
         self.pid = current_process().pid
         self.cluster_id = uuid.uuid4()
         self.host = socket.gethostname()
-        self.timeout = Conf.TIMEOUT
+        self.timeout = None
         signal.signal(signal.SIGTERM, self.sig_handler)
         signal.signal(signal.SIGINT, self.sig_handler)
 
@@ -131,7 +133,7 @@ class Sentinel:
         start_event,
         cluster_id,
         broker=None,
-        timeout=Conf.TIMEOUT,
+        timeout=None,
         start=True,
     ):
         # Make sure we catch signals for the pool
@@ -146,13 +148,17 @@ class Sentinel:
         self.tob = timezone.now()
         self.stop_event = stop_event
         self.start_event = start_event
-        self.timeout = timeout
+        self.timeout = timeout or Conf.TIMEOUT
         self.event_out = Event()
         logger.info(
             _("%(name)s main at %(id)s") % {"name": self.name, "id": current_process().pid}
         )
         if start:
             self.start()
+
+    def queue_name(self):
+        # multi-queue: cluster name is (broker's) queue_name
+        return self.broker.list_key if self.broker else '--'
 
     def start(self):
         self.broker.ping()
@@ -191,13 +197,13 @@ class Sentinel:
             _("%(name)s guarding cluster %(cluster_name)s")
             % {
                 "name": current_process().name,
-                "cluster_name": humanize(self.cluster_id.hex),
+                "cluster_name": humanize(self.cluster_id.hex) + f" [{self.queue_name()}]",
             }
         )
         self.start_event.set()
         logger.info(
             _("Q Cluster %(cluster_name)s running.")
-            % {"cluster_name": humanize(self.cluster_id.hex)}
+            % {"cluster_name": humanize(self.cluster_id.hex) + f" [{self.queue_name()}]"}
         )
         counter = 0
         # Guard loop. Runs at least once
@@ -273,7 +279,6 @@ class Sentinel:
             logger.error(_("Couldn't terminate tasks within 20 seconds, killing processes now"))
             for worker in self.pool.workers:
                 worker.process.kill()
-
 
         logger.debug(_("All tasks were processed and workers where stopped"))
 

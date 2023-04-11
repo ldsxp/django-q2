@@ -45,8 +45,6 @@ def add_years(d, years):
         return d.replace(year=new_date.year, month=new_date.month, day=new_date.day)
 
 
-
-
 def localtime(value=None) -> datetime:
     """Override for timezone.localtime to deal with naive times and local times"""
     if settings.USE_TZ:
