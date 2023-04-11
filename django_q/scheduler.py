@@ -25,11 +25,12 @@ class Scheduler(ProcessManager):
         logger.debug("Start sheduling")
         if broker is None:
             broker = get_broker()
+        q_default = db.models.Q(cluster__isnull=True) if Conf.CLUSTER_NAME == Conf.PREFIX else db.models.Q(pk__in=[])
         with db.transaction.atomic(using=db.router.db_for_write(Schedule)):
             for s in (
                 Schedule.objects.select_for_update()
                 .exclude(repeats=0)
-                .filter(db.models.Q(next_run__lt=timezone.now()), db.models.Q(cluster__isnull=True) | db.models.Q(cluster=Conf.PREFIX))
+                .filter(db.models.Q(next_run__lt=timezone.now()), q_default | db.models.Q(cluster=Conf.CLUSTER_NAME))
             ):
                 args = s.parse_args()
                 kwargs = s.parse_kwargs()
@@ -47,14 +48,12 @@ class Scheduler(ProcessManager):
 
                     s.next_run = next_run
                     s.repeats += -1
-                # send it to the cluster
-                scheduled_broker = broker
-                try:
-                    scheduled_broker = get_broker(q_options["broker_name"])
-                except:  # noqa: E722
-                    # invalid broker_name or non existing broker with broker_name
-                    pass
-                q_options["broker"] = scheduled_broker
+                # send it to the cluster; any cluster name is allowed in multi-queue scenarios
+                # because `broker_name` is confusing, using `cluster` name is recommended and take
+                q_options["cluster"] = s.cluster or q_options.get("cluster", q_options.pop("broker_name", None))
+                if q_options['cluster'] is None or q_options['cluster'] == Conf.CLUSTER_NAME:
+                    q_options["broker"] = broker
+
                 q_options["group"] = q_options.get("group", s.name or s.id)
                 kwargs["q_options"] = q_options
 

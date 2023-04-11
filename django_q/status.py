@@ -41,9 +41,6 @@ class Stat(Status):
         self.status = sentinel.status()
         self.done_q_size = 0
         self.task_q_size = 0
-        if Conf.QSIZE:
-            self.done_q_size = sentinel.result_queue.qsize()
-            self.task_q_size = sentinel.task_queue.qsize()
         # if sentinel.monitor:
         #     self.monitor = sentinel.monitor.pid
         # if sentinel.pusher:

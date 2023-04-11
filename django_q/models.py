@@ -364,7 +364,7 @@ class OrmQ(models.Model):
     def group(self):
         if isinstance(self.task, dict):
             return self.task.get("group", "")
-        return self.task.group)
+        return self.task.group
 
     def args(self):
         return self.task.get("args")

@@ -47,7 +47,7 @@ def async_task(func, *args, **kwargs):
     )
 
     # don't serialize the broker
-    broker = given_kwargs.pop("broker", None) or q_options.pop("broker", None) or get_broker(task.get("cluster")) or get_broker()
+    broker = given_kwargs.pop("broker", None) or q_options.pop("broker", None) or get_broker(task.cluster) or get_broker()
 
     print(broker.list_key)
 
@@ -266,7 +266,7 @@ def fetch_cached(task_id, wait=0, broker=None):
                 hook=task.hook,
                 args=task.args,
                 kwargs=task.kwargs,
-                cluster=task.get("cluster"),
+                cluster=task.cluster,
                 started=task.started_at,
                 stopped=task.finished_at,
                 result=task.result,
@@ -337,7 +337,7 @@ def fetch_group_cached(group_id, failures=True, wait=0, count=None, broker=None)
                         hook=task.hook,
                         args=task.args,
                         kwargs=task.kwargs,
-                        cluster=task.get("cluster"),
+                        cluster=task.cluster,
                         started=task.started_at,
                         stopped=task.finished_at,
                         result=task.result,

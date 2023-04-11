@@ -24,7 +24,6 @@ class Puller(ProcessManager):
     @staticmethod
     def get_tasks_from_broker(broker=None):
         queued_tasks = []
-        logger.debug("pulling new tasks")
         if broker is None:
             broker = get_broker()
         try:
@@ -47,6 +46,7 @@ class Puller(ProcessManager):
                     logger.exception("Failed to pull task from broker - bad task")
                     broker.fail(ack_id)
                     continue
+                queue_task.cluster = Conf.CLUSTER_NAME # save actual cluster name to orm task table
                 queue_task.ack_id = ack_id
                 # send back to main process
                 queued_tasks.append(queue_task)

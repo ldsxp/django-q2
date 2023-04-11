@@ -1,5 +1,6 @@
 from __future__ import annotations
 from datetime import datetime
+from django_q.brokers import Broker
 from django.utils import timezone
 from django_q.signing import SignedPackage
 from django_q.models import Success, Task
@@ -18,7 +19,8 @@ from django_q.conf import Conf, logger
 
 @dataclass
 class QueueTask:
-    class Result(enum.IntEnum):
+    class Status(enum.IntEnum):
+        QUEUED = 0
         SUCCESS = 1
         FAILED = 2
         TIMEOUT = 3
@@ -26,13 +28,14 @@ class QueueTask:
     func: Union[Callable, str]
     name: str
     group: Optional[str] = None
+    cluster: str = Conf.CLUSTER_NAME
     queued_at: Optional[datetime] = timezone.now()
     finished_at: Optional[datetime] = None
     ack_id: Optional[str] = None
     started_at: Optional[datetime] = None
     id: str = "-1"
     timeout: Optional[int] = Conf.TIMEOUT
-    result_status: Optional[Result] = None
+    status: Optional[Status] = None
     result: Any = None
     save: bool = Conf.SAVE_LIMIT >= 0
     chain: Union[str, QueueTask] = ""
@@ -53,11 +56,11 @@ class QueueTask:
 
     @property
     def has_succeeded(self):
-        return self.result_status == self.Result.SUCCESS
+        return self.status == self.Status.SUCCESS
 
     @property
     def has_timed_out(self):
-        return self.result_status == self.Result.TIMEOUT
+        return self.status == self.Status.TIMEOUT
 
     @property
     def is_callable(self):
@@ -94,6 +97,7 @@ class QueueTask:
             )
         close_old_django_connections()
 
+        logger.debug(self.func_name)
         try:
             filters = {}
             if (
@@ -125,6 +129,7 @@ class QueueTask:
                     'hook': self.hook,
                     'args': self.args,
                     'kwargs': self.kwargs,
+                    'cluster': self.cluster,
                     'started': self.started_at,
                     'result': self.result,
                     'group': self.group,

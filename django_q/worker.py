@@ -118,9 +118,9 @@ class WorkerProcess(Process):
                 result = res
         except (TimeoutException, Exception) as e:
             if isinstance(e, TimeoutException):
-                task.result = QueueTask.Result.TIMEOUT
+                task.status = QueueTask.Status.TIMEOUT
             else:
-                task.result = QueueTask.Result.FAILED
+                task.status = QueueTask.Status.FAILED
             result = f"{e} : {traceback.format_exc()}"
 
             if error_reporter:
@@ -130,9 +130,9 @@ class WorkerProcess(Process):
             return task
         else:
             # succeeded
-            task.result = QueueTask.Result.SUCCESS
+            task.status = QueueTask.Status.SUCCESS
         finally:
-            task.result_payload = result
+            task.result = result
             task.finished_at = timezone.now()
         return task
 
