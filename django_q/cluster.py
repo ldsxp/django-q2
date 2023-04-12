@@ -178,7 +178,6 @@ class Sentinel:
             return Conf.STOPPED
 
     def spawn_cluster(self):
-        # Stat(self).save()
         # close connections before spawning new process
         if not Conf.SYNC:
             db.connections.close_all()
@@ -190,6 +189,7 @@ class Sentinel:
         # set worker cpu affinity if needed
         if psutil and Conf.CPU_AFFINITY:
             set_cpu_affinity(Conf.CPU_AFFINITY, [w.process.pid for w in self.pool.workers])
+        Stat(self).save()
 
 
     def guard(self):
@@ -201,6 +201,7 @@ class Sentinel:
             }
         )
         self.start_event.set()
+        Stat(self).save()
         logger.info(
             _("Q Cluster %(cluster_name)s running.")
             % {"cluster_name": humanize(self.cluster_id.hex) + f" [{self.queue_name()}]"}
@@ -253,6 +254,7 @@ class Sentinel:
             logger.info("sleep")
             counter += 1
             sleep(Conf.GUARD_CYCLE)
+            Stat(self).save()
         self.stop()
 
     def stop(self):
